@@ -159,24 +159,21 @@ func (h *Handler) PostPaint(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ip := getIP(r)
-
-	// Cooldown disabled for development
+	// Cooldown and speed limit disabled for development
+	// ip := getIP(r)
 	// cooldownDuration := time.Duration(h.config.PaintCooldownMs) * time.Millisecond
 	// if h.cooldownLimiter.CheckCooldown(ip, cooldownDuration) {
 	// 	http.Error(w, "cooldown", 429)
+	// 	return
+	// }
+	// if !h.speedLimiter.CheckSpeed(ip, req.Lat, req.Lon) {
+	// 	http.Error(w, "speed limit exceeded", 403)
 	// 	return
 	// }
 
 	// Check geofence (simplified - just check lat/lon bounds for Boston area)
 	if req.Lat < 42.0 || req.Lat > 43.0 || req.Lon < -72.0 || req.Lon > -70.0 {
 		http.Error(w, "geofence", 403)
-		return
-	}
-
-	// Check speed limit
-	if !h.speedLimiter.CheckSpeed(ip, req.Lat, req.Lon) {
-		http.Error(w, "speed limit exceeded", 403)
 		return
 	}
 

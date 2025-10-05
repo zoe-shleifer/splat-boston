@@ -58,6 +58,13 @@ interface TileData {
   colorIndex: number;
 }
 
+interface ChunkInfo {
+  cx: number;
+  cy: number;
+  data: Uint8Array;
+  seq: number;
+}
+
 // Available colors for painting (matching backend palette)
 // Index 0 = unpainted (transparent), indices 1-8 = colors
 const PAINT_COLORS = [
@@ -84,6 +91,103 @@ function hexToColorIndex(hex: string): number {
   return index >= 0 ? index + 1 : 1; // Default to red if not found
 }
 
+// Helper to create chunk key
+function chunkKey(cx: number, cy: number): string {
+  return `${cx}:${cy}`;
+}
+
+// Calculate which chunks are visible in the given bounds
+function getVisibleChunks(
+  bounds: L.LatLngBounds, 
+  zoom: number,
+  userLocation?: { lat: number; lng: number } | null
+): Array<{ cx: number; cy: number }> {
+  const chunks: Array<{ cx: number; cy: number }> = [];
+  const seen = new Set<string>();
+  
+  // Don't load chunks when zoomed out too far (performance protection)
+  // At zoom 10 or less, the entire Greater Boston is visible (800+ chunks)
+  if (zoom < 11) {
+    // Only load chunks in a small area around user
+    if (userLocation) {
+      const { x, y } = latLonToTileXY(userLocation.lat, userLocation.lng);
+      const userChunk = chunkOf(x, y);
+      
+      // Load 5x5 grid around user = 25 chunks
+      for (let dx = -2; dx <= 2; dx++) {
+        for (let dy = -2; dy <= 2; dy++) {
+          chunks.push({ cx: userChunk.cx + dx, cy: userChunk.cy + dy });
+        }
+      }
+      return chunks;
+    }
+    return [];
+  }
+  
+  // Get corners of the visible area
+  const sw = bounds.getSouthWest();
+  const ne = bounds.getNorthEast();
+  
+  // Convert corners to tile coordinates
+  const swTile = latLonToTileXY(sw.lat, sw.lng);
+  const neTile = latLonToTileXY(ne.lat, ne.lng);
+  
+  // Get chunk coordinates for corners
+  const swChunk = chunkOf(swTile.x, swTile.y);
+  const neChunk = chunkOf(neTile.x, neTile.y);
+  
+  // Calculate how many chunks would be visible
+  const chunksWide = Math.abs(neChunk.cx - swChunk.cx) + 1;
+  const chunksHigh = Math.abs(neChunk.cy - swChunk.cy) + 1;
+  const totalChunks = chunksWide * chunksHigh;
+  
+  // Hard limit: don't load more than 400 chunks at once (12.8 MB)
+  // This allows zooming out significantly while staying under 20MB total
+  const MAX_CHUNKS = 400;
+  
+  if (totalChunks > MAX_CHUNKS) {
+    // Prioritize chunks near user location if available
+    if (userLocation) {
+      const { x, y } = latLonToTileXY(userLocation.lat, userLocation.lng);
+      const userChunk = chunkOf(x, y);
+      
+      // Load a large area around user (15x15 grid = 225 chunks ≈ 7.2MB)
+      const radius = 7;
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          chunks.push({ cx: userChunk.cx + dx, cy: userChunk.cy + dy });
+        }
+      }
+      return chunks;
+    }
+    
+    // Otherwise load large center area (15x15 = 225 chunks)
+    const centerCx = Math.floor((swChunk.cx + neChunk.cx) / 2);
+    const centerCy = Math.floor((swChunk.cy + neChunk.cy) / 2);
+    const radius = 7;
+    
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        chunks.push({ cx: centerCx + dx, cy: centerCy + dy });
+      }
+    }
+    return chunks;
+  }
+  
+  // Normal case: iterate through all visible chunks
+  for (let cx = Math.min(swChunk.cx, neChunk.cx); cx <= Math.max(swChunk.cx, neChunk.cx); cx++) {
+    for (let cy = Math.min(swChunk.cy, neChunk.cy); cy <= Math.max(swChunk.cy, neChunk.cy); cy++) {
+      const key = chunkKey(cx, cy);
+      if (!seen.has(key)) {
+        seen.add(key);
+        chunks.push({ cx, cy });
+      }
+    }
+  }
+  
+  return chunks;
+}
+
 const MapEvents = ({ onMapClick, userLocation, paintingRadius }: {
   onMapClick: (lat: number, lng: number) => void;
   userLocation: UserLocation | null;
@@ -104,6 +208,41 @@ const MapEvents = ({ onMapClick, userLocation, paintingRadius }: {
       }
     },
   });
+  
+  return null;
+};
+
+// Component to track viewport changes and load chunks
+const ViewportTracker: React.FC<{ 
+  onViewportChange: (chunks: Array<{ cx: number; cy: number }>) => void;
+  userLocation: UserLocation | null;
+}> = ({ onViewportChange, userLocation }) => {
+  const map = useMap();
+  const lastUpdateRef = useRef<string>('');
+  
+  const updateVisibleChunks = useCallback(() => {
+    const bounds = map.getBounds();
+    const zoom = map.getZoom();
+    const chunks = getVisibleChunks(bounds, zoom, userLocation);
+    
+    // Create a key to detect if chunks actually changed
+    const chunksKey = chunks.map(c => chunkKey(c.cx, c.cy)).sort().join(',');
+    
+    if (chunksKey !== lastUpdateRef.current) {
+      lastUpdateRef.current = chunksKey;
+      onViewportChange(chunks);
+    }
+  }, [map, onViewportChange, userLocation]);
+  
+  useMapEvents({
+    moveend: updateVisibleChunks,
+    zoomend: updateVisibleChunks,
+  });
+  
+  // Initial load
+  useEffect(() => {
+    updateVisibleChunks();
+  }, [updateVisibleChunks]);
   
   return null;
 };
@@ -293,12 +432,11 @@ const App: React.FC = () => {
   const [paintedTiles, setPaintedTiles] = useState<Map<string, TileData>>(new Map());
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [selectedTile, setSelectedTile] = useState<string | null>(null);
-  const [currentChunk, setCurrentChunk] = useState<{ cx: number; cy: number } | null>(null);
-  const [chunkData, setChunkData] = useState<Uint8Array | null>(null);
-  const [chunkSeq, setChunkSeq] = useState<number>(0);
+  const [loadedChunks, setLoadedChunks] = useState<Map<string, ChunkInfo>>(new Map());
   const [loadingChunk, setLoadingChunk] = useState(false);
   const [paintError, setPaintError] = useState<string | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [visibleChunks, setVisibleChunks] = useState<Set<string>>(new Set());
   const wsManagerRef = useRef<ChunkWebSocketManager>(new ChunkWebSocketManager());
 
   // Get user's current location
@@ -348,124 +486,214 @@ const App: React.FC = () => {
 
   // Load chunk data from backend
   const loadChunk = useCallback(async (cx: number, cy: number) => {
+    const key = chunkKey(cx, cy);
+    
+    // Skip if already loaded
+    if (loadedChunks.has(key)) {
+      return;
+    }
+    
     setLoadingChunk(true);
     try {
       const { data, seq } = await fetchChunk(cx, cy);
-      setChunkData(data);
-      setChunkSeq(seq);
-      setCurrentChunk({ cx, cy });
       
-      // Parse chunk data and update painted tiles
-      const tiles = new Map<string, TileData>();
-      for (let o = 0; o < CHUNK_SIZE * CHUNK_SIZE; o++) {
-        const colorIndex = getNibble(data, o);
-        if (colorIndex > 0) {
+      // Store chunk data
+      setLoadedChunks(prev => {
+        const updated = new Map(prev);
+        updated.set(key, { cx, cy, data, seq });
+        return updated;
+      });
+      
+      // Parse chunk data and merge painted tiles
+      setPaintedTiles(prev => {
+        const updated = new Map(prev);
+        
+        for (let o = 0; o < CHUNK_SIZE * CHUNK_SIZE; o++) {
+          const colorIndex = getNibble(data, o);
+          
           // Calculate tile coordinates
           const localY = Math.floor(o / CHUNK_SIZE);
           const localX = o % CHUNK_SIZE;
           const x = cx * CHUNK_SIZE + localX;
           const y = cy * CHUNK_SIZE + localY;
-          const { lat, lon: lng } = tileXYToLatLon(x, y);
+          const tileKey = `${x}_${y}`;
           
-          tiles.set(`${x}_${y}`, {
-            x,
-            y,
-            lat,
-            lng,
-            color: colorIndexToHex(colorIndex),
-            colorIndex,
-          });
+          if (colorIndex > 0) {
+            const { lat, lon: lng } = tileXYToLatLon(x, y);
+            updated.set(tileKey, {
+              x,
+              y,
+              lat,
+              lng,
+              color: colorIndexToHex(colorIndex),
+              colorIndex,
+            });
+          } else {
+            // Remove tile if it's now unpainted
+            updated.delete(tileKey);
+          }
         }
-      }
-      setPaintedTiles(tiles);
+        
+        return updated;
+      });
     } catch (error) {
-      console.error('Failed to load chunk:', error);
-      setLocationError('Failed to load chunk data');
+      console.error(`Failed to load chunk (${cx}, ${cy}):`, error);
+      setLocationError(`Failed to load chunk (${cx}, ${cy})`);
     } finally {
       setLoadingChunk(false);
     }
-  }, []);
+  }, [loadedChunks]);
 
   // Handle delta updates from WebSocket
-  const handleDelta = useCallback((delta: Delta) => {
-    if (delta.seq <= chunkSeq) {
-      return; // Ignore old deltas
-    }
-    
-    setChunkSeq(delta.seq);
+  const handleDelta = useCallback((cx: number, cy: number, delta: Delta) => {
+    const key = chunkKey(cx, cy);
     
     // Update chunk data
-    if (chunkData && currentChunk) {
-      const newData = new Uint8Array(chunkData);
+    setLoadedChunks(prev => {
+      const chunk = prev.get(key);
+      if (!chunk) return prev;
+      
+      // Check if delta is newer
+      if (delta.seq <= chunk.seq) {
+        return prev; // Ignore old deltas
+      }
+      
+      const newData = new Uint8Array(chunk.data);
       setNibble(newData, delta.o, delta.color);
-      setChunkData(newData);
       
-      // Update painted tiles
-      const localY = Math.floor(delta.o / CHUNK_SIZE);
-      const localX = delta.o % CHUNK_SIZE;
-      const x = currentChunk.cx * CHUNK_SIZE + localX;
-      const y = currentChunk.cy * CHUNK_SIZE + localY;
-      const { lat, lon: lng } = tileXYToLatLon(x, y);
+      const updated = new Map(prev);
+      updated.set(key, { ...chunk, data: newData, seq: delta.seq });
+      return updated;
+    });
+    
+    // Update painted tiles
+    const localY = Math.floor(delta.o / CHUNK_SIZE);
+    const localX = delta.o % CHUNK_SIZE;
+    const x = cx * CHUNK_SIZE + localX;
+    const y = cy * CHUNK_SIZE + localY;
+    const tileKey = `${x}_${y}`;
+    
+    setPaintedTiles(prev => {
+      const updated = new Map(prev);
       
-      setPaintedTiles(prev => {
-        const newTiles = new Map(prev);
-        if (delta.color === 0) {
-          newTiles.delete(`${x}_${y}`);
-        } else {
-          newTiles.set(`${x}_${y}`, {
-            x,
-            y,
-            lat,
-            lng,
-            color: colorIndexToHex(delta.color),
-            colorIndex: delta.color,
-          });
-        }
-        return newTiles;
-      });
-    }
-  }, [chunkData, currentChunk, chunkSeq]);
+      if (delta.color === 0) {
+        updated.delete(tileKey);
+      } else {
+        const { lat, lon: lng } = tileXYToLatLon(x, y);
+        updated.set(tileKey, {
+          x,
+          y,
+          lat,
+          lng,
+          color: colorIndexToHex(delta.color),
+          colorIndex: delta.color,
+        });
+      }
+      
+      return updated;
+    });
+  }, []);
 
-  // Subscribe to WebSocket updates when chunk changes
+  // Handle viewport changes and manage chunk loading/subscriptions
+  const handleViewportChange = useCallback((chunks: Array<{ cx: number; cy: number }>) => {
+    const newVisibleChunks = new Set(chunks.map(c => chunkKey(c.cx, c.cy)));
+    setVisibleChunks(newVisibleChunks);
+    
+    // Load all visible chunks
+    chunks.forEach(({ cx, cy }) => {
+      loadChunk(cx, cy);
+    });
+  }, [loadChunk]);
+
+  // Subscribe to WebSocket updates for all visible chunks
   useEffect(() => {
-    if (currentChunk) {
-      const { cx, cy } = currentChunk;
-      wsManagerRef.current.subscribe(
-        cx,
-        cy,
-        handleDelta,
-        (error) => {
-          console.error('WebSocket error:', error);
-          setWsConnected(false);
-        },
-        () => {
-          console.log('WebSocket closed');
-          setWsConnected(false);
-        },
-        () => {
-          console.log('WebSocket opened');
-          setWsConnected(true);
-        }
-      );
-    }
+    const manager = wsManagerRef.current;
+    
+    // Subscribe to all visible chunks
+    visibleChunks.forEach(key => {
+      const [cxStr, cyStr] = key.split(':');
+      const cx = parseInt(cxStr, 10);
+      const cy = parseInt(cyStr, 10);
+      
+      // Check if already subscribed
+      if (!manager.getConnection(cx, cy)) {
+        manager.subscribe(
+          cx,
+          cy,
+          (delta) => handleDelta(cx, cy, delta),
+          (error) => {
+            console.error(`WebSocket error for chunk (${cx}, ${cy}):`, error);
+          },
+          () => {
+            console.log(`WebSocket closed for chunk (${cx}, ${cy})`);
+          },
+          () => {
+            console.log(`WebSocket opened for chunk (${cx}, ${cy})`);
+            setWsConnected(true);
+          }
+        );
+      }
+    });
+    
+    // Unsubscribe from chunks that are no longer visible
+    const currentConnections = new Map<string, { cx: number; cy: number }>();
+    loadedChunks.forEach((chunk, key) => {
+      currentConnections.set(key, { cx: chunk.cx, cy: chunk.cy });
+    });
+    
+    currentConnections.forEach(({ cx, cy }, key) => {
+      if (!visibleChunks.has(key)) {
+        manager.unsubscribe(cx, cy);
+      }
+    });
     
     return () => {
-      wsManagerRef.current.unsubscribeAll();
+      // Cleanup: unsubscribe from all on unmount
+      manager.unsubscribeAll();
     };
-  }, [currentChunk, handleDelta]);
+  }, [visibleChunks, handleDelta, loadedChunks]);
 
-  // Load chunk when user location changes
+  // Unload chunks that are far outside the viewport to save memory
   useEffect(() => {
-    if (userLocation) {
-      const { x, y } = latLonToTileXY(userLocation.lat, userLocation.lng);
-      const { cx, cy } = chunkOf(x, y);
+    const MAX_LOADED_CHUNKS = 625; // Keep at most 625 chunks in memory (20MB)
+    
+    if (loadedChunks.size > MAX_LOADED_CHUNKS) {
+      // Remove chunks that are not visible
+      setLoadedChunks(prev => {
+        const updated = new Map(prev);
+        const chunksToRemove: string[] = [];
+        
+        prev.forEach((chunk, key) => {
+          if (!visibleChunks.has(key)) {
+            chunksToRemove.push(key);
+          }
+        });
+        
+        // Remove oldest non-visible chunks first
+        chunksToRemove.slice(0, prev.size - MAX_LOADED_CHUNKS).forEach(key => {
+          updated.delete(key);
+        });
+        
+        return updated;
+      });
       
-      // Only load if different chunk
-      if (!currentChunk || currentChunk.cx !== cx || currentChunk.cy !== cy) {
-        loadChunk(cx, cy);
-      }
+      // Also remove tiles from unloaded chunks
+      setPaintedTiles(prev => {
+        const updated = new Map(prev);
+        
+        prev.forEach((tile, tileKey) => {
+          const { cx, cy } = chunkOf(tile.x, tile.y);
+          const chunkKeyStr = chunkKey(cx, cy);
+          
+          if (!loadedChunks.has(chunkKeyStr)) {
+            updated.delete(tileKey);
+          }
+        });
+        
+        return updated;
+      });
     }
-  }, [userLocation, currentChunk, loadChunk]);
+  }, [loadedChunks, visibleChunks]);
 
   // Handle tile painting
   const handleTilePaint = useCallback(async (lat: number, lng: number) => {
@@ -542,11 +770,9 @@ const App: React.FC = () => {
               {wsConnected ? '● Connected' : '○ Disconnected'}
             </span>
           </div>
-          {currentChunk && (
-            <div className="text-xs text-gray-600 mt-1">
-              Chunk: ({currentChunk.cx}, {currentChunk.cy}) | Seq: {chunkSeq}
-            </div>
-          )}
+          <div className="text-xs text-gray-600 mt-1">
+            Loaded Chunks: {loadedChunks.size} | Visible: {visibleChunks.size}
+          </div>
           {loadingChunk && (
             <div className="text-xs text-blue-600 mt-1">Loading chunk...</div>
           )}
@@ -637,6 +863,9 @@ const App: React.FC = () => {
         ))}
 
         {/* Street overlays removed - focusing on core painting functionality */}
+
+        {/* Viewport Tracker for multi-chunk loading */}
+        <ViewportTracker onViewportChange={handleViewportChange} userLocation={userLocation} />
 
         {/* Map Events */}
         <MapEvents

@@ -125,10 +125,10 @@ The app will open at `http://localhost:3000` and connect to the backend at `http
 ✅ Paint cooldown error handling
 ✅ Speed limit error handling
 ✅ Connection status indicator
+✅ Multi-chunk viewport management
 
 ### TODO
 - [ ] Cloudflare Turnstile integration
-- [ ] Multi-chunk viewport management
 - [ ] Offline support with local cache
 - [ ] Paint history/undo
 - [ ] User statistics

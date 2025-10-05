@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        #log { background: #f0f0f0; padding: 10px; margin-top: 10px; max-height: 400px; overflow-y: auto; }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <h2>WebSocket Test - Splat Boston</h2>
+    <p>This will test if WebSocket connections and paint broadcasts are working.</p>
+    
+    <button onclick="testWebSocket()">Test WebSocket Connection</button>
+    <button onclick="sendPaintRequest()">Send Paint Request</button>
+    
+    <div id="log"></div>
+    
+    <script>
+        let ws = null;
+        const API_URL = 'http://localhost:8080';
+        
+        function log(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = type;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logDiv.appendChild(entry);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function testWebSocket() {
+            if (ws) {
+                log('Closing existing connection...', 'info');
+                ws.close();
+            }
+            
+            const chunk = { cx: 343, cy: 612 }; // Downtown Boston
+            const wsUrl = `ws://localhost:8080/sub?cx=${chunk.cx}&cy=${chunk.cy}`;
+            
+            log(`Connecting to: ${wsUrl}`, 'info');
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = () => {
+                    log(`✓ WebSocket connected to chunk (${chunk.cx}, ${chunk.cy})`, 'success');
+                    log('Waiting for paint events...', 'info');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const delta = JSON.parse(event.data);
+                        log(`✓ Received paint: seq=${delta.seq}, offset=${delta.o}, color=${delta.color}`, 'success');
+                    } catch (e) {
+                        log(`✗ Failed to parse message: ${event.data}`, 'error');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    log(`✗ WebSocket error: ${error}`, 'error');
+                };
+                
+                ws.onclose = () => {
+                    log('WebSocket closed', 'info');
+                    ws = null;
+                };
+            } catch (error) {
+                log(`✗ Failed to create WebSocket: ${error.message}`, 'error');
+            }
+        }
+        
+        async function sendPaintRequest() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('✗ WebSocket not connected. Click "Test WebSocket Connection" first.', 'error');
+                return;
+            }
+            
+            const paintRequest = {
+                lat: 42.3601,  // Boston Common
+                lon: -71.0589,
+                cx: 343,
+                cy: 612,
+                o: Math.floor(Math.random() * 65536), // Random tile
+                color: Math.floor(Math.random() * 8) + 1, // Random color 1-8
+                turnstileToken: ''
+            };
+            
+            log(`Sending paint request: offset=${paintRequest.o}, color=${paintRequest.color}`, 'info');
+            
+            try {
+                const response = await fetch(`${API_URL}/paint`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(paintRequest)
+                });
+                
+                if (response.ok) {
+                    const result = await response.json();
+                    log(`✓ Paint successful: seq=${result.seq}`, 'success');
+                    log('Watch for the delta message above!', 'info');
+                } else {
+                    const error = await response.text();
+                    log(`✗ Paint failed (${response.status}): ${error}`, 'error');
+                }
+            } catch (error) {
+                log(`✗ Paint request error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Auto-connect on load
+        window.onload = () => {
+            log('WebSocket test loaded. Click "Test WebSocket Connection" to start.', 'info');
+        };
+    </script>
+</body>
+</html>
+
