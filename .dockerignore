@@ -1,0 +1,9 @@
+bin/
+coverage.out
+coverage.html
+*.log
+.DS_Store
+.git/
+.gitignore
+README.md
+

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Splat Boston - Test Client</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .section {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #output {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+        .info { color: #2196f3; }
+        .timestamp { color: #888; font-size: 11px; }
+        input {
+            padding: 8px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 150px;
+        }
+        label {
+            display: inline-block;
+            width: 80px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎨 Splat Boston - Test Client</h1>
+    
+    <div class="section">
+        <h2>🏥 Health Check</h2>
+        <button onclick="checkHealth()">Check Health</button>
+    </div>
+
+    <div class="section">
+        <h2>🎨 Paint a Tile</h2>
+        <div>
+            <label>Latitude:</label>
+            <input type="number" id="lat" value="42.3601" step="0.0001">
+            <label>Longitude:</label>
+            <input type="number" id="lon" value="-71.0589" step="0.0001">
+        </div>
+        <div>
+            <label>Chunk X:</label>
+            <input type="number" id="cx" value="0">
+            <label>Chunk Y:</label>
+            <input type="number" id="cy" value="0">
+        </div>
+        <div>
+            <label>Offset:</label>
+            <input type="number" id="offset" value="0" min="0" max="65535">
+            <label>Color:</label>
+            <input type="number" id="color" value="5" min="0" max="8">
+        </div>
+        <button onclick="paintTile()">Paint Tile</button>
+        <button onclick="paintRandom()">Paint Random Tile</button>
+        <button onclick="testCooldown()">Test Cooldown (will fail)</button>
+        <button onclick="testGeofence()">Test Geofence (will fail)</button>
+    </div>
+
+    <div class="section">
+        <h2>📦 Get Chunk</h2>
+        <div>
+            <label>Chunk X:</label>
+            <input type="number" id="get_cx" value="0">
+            <label>Chunk Y:</label>
+            <input type="number" id="get_cy" value="0">
+        </div>
+        <button onclick="getChunk()">Get Chunk</button>
+    </div>
+
+    <div class="section">
+        <h2>🔌 WebSocket</h2>
+        <button id="wsBtn" onclick="toggleWebSocket()">Connect WebSocket</button>
+        <span id="wsStatus">Disconnected</span>
+    </div>
+
+    <div class="section">
+        <h2>📋 Output Log</h2>
+        <button onclick="clearLog()">Clear Log</button>
+        <pre id="output"></pre>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+        const WS_BASE = 'ws://localhost:8080';
+        let ws = null;
+        const output = document.getElementById('output');
+
+        function log(msg, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const line = `<span class="timestamp">[${timestamp}]</span> <span class="${type}">${msg}</span>\n`;
+            output.innerHTML += line;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clearLog() {
+            output.innerHTML = '';
+        }
+
+        async function checkHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/healthz`);
+                const text = await response.text();
+                if (response.ok) {
+                    log(`✅ Health check passed: ${text}`, 'success');
+                } else {
+                    log(`❌ Health check failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Health check error: ${error.message}`, 'error');
+            }
+        }
+
+        async function paintTile() {
+            const lat = parseFloat(document.getElementById('lat').value);
+            const lon = parseFloat(document.getElementById('lon').value);
+            const cx = parseInt(document.getElementById('cx').value);
+            const cy = parseInt(document.getElementById('cy').value);
+            const o = parseInt(document.getElementById('offset').value);
+            const color = parseInt(document.getElementById('color').value);
+
+            try {
+                const response = await fetch(`${API_BASE}/paint`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lat, lon, cx, cy, o, color, turnstileToken: '' })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    log(`✅ Paint successful! Seq: ${data.seq}, Ts: ${data.ts}`, 'success');
+                } else {
+                    log(`❌ Paint failed: ${response.status} - ${JSON.stringify(data)}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Paint error: ${error.message}`, 'error');
+            }
+        }
+
+        async function paintRandom() {
+            document.getElementById('offset').value = Math.floor(Math.random() * 1000);
+            document.getElementById('color').value = Math.floor(Math.random() * 9);
+            await paintTile();
+        }
+
+        async function testCooldown() {
+            log('⏱️ Testing cooldown...', 'info');
+            await paintTile();
+            setTimeout(async () => {
+                log('⏱️ Trying to paint again immediately...', 'info');
+                await paintTile();
+            }, 100);
+        }
+
+        async function testGeofence() {
+            log('🌍 Testing geofence with NYC coordinates...', 'info');
+            document.getElementById('lat').value = 40.7128;
+            document.getElementById('lon').value = -74.0060;
+            await paintTile();
+            // Reset to Boston
+            document.getElementById('lat').value = 42.3601;
+            document.getElementById('lon').value = -71.0589;
+        }
+
+        async function getChunk() {
+            const cx = document.getElementById('get_cx').value;
+            const cy = document.getElementById('get_cy').value;
+            
+            try {
+                const response = await fetch(`${API_BASE}/state/chunk?cx=${cx}&cy=${cy}`);
+                const seq = response.headers.get('X-Seq');
+                const size = response.headers.get('Content-Length') || 'chunked';
+                if (response.ok) {
+                    log(`✅ Chunk retrieved: Seq=${seq}, Size=${size} bytes`, 'success');
+                } else {
+                    log(`❌ Chunk retrieval failed: ${response.status}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Chunk retrieval error: ${error.message}`, 'error');
+            }
+        }
+
+        function toggleWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                return;
+            }
+
+            const cx = document.getElementById('cx').value;
+            const cy = document.getElementById('cy').value;
+            
+            try {
+                ws = new WebSocket(`${WS_BASE}/sub?cx=${cx}&cy=${cy}`);
+                
+                ws.onopen = () => {
+                    log('🔌 WebSocket connected', 'success');
+                    document.getElementById('wsStatus').textContent = 'Connected';
+                    document.getElementById('wsBtn').textContent = 'Disconnect WebSocket';
+                };
+                
+                ws.onmessage = (event) => {
+                    const delta = JSON.parse(event.data);
+                    log(`📨 Delta: seq=${delta.seq}, o=${delta.o}, color=${delta.color}`, 'info');
+                };
+                
+                ws.onclose = () => {
+                    log('🔌 WebSocket disconnected', 'info');
+                    document.getElementById('wsStatus').textContent = 'Disconnected';
+                    document.getElementById('wsBtn').textContent = 'Connect WebSocket';
+                    ws = null;
+                };
+                
+                ws.onerror = (error) => {
+                    log(`❌ WebSocket error: ${error}`, 'error');
+                };
+            } catch (error) {
+                log(`❌ WebSocket connection error: ${error.message}`, 'error');
+            }
+        }
+
+        // Initial log
+        log('🚀 Test client loaded. Server: ' + API_BASE, 'success');
+        log('ℹ️ Make sure the server is running on port 8080', 'info');
+    </script>
+</body>
+</html>
+

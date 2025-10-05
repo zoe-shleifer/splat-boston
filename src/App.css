@@ -1,32 +1,96 @@
-/* App-specific styles */
 .App {
-  position: relative;
-  height: 100vh;
-  width: 100vw;
-  overflow: hidden;
+  text-align: center;
 }
 
-/* Ensure map takes full space */
+/* Ensure map is visible */
 .leaflet-container {
-  height: 100vh !important;
-  width: 100% !important;
+  height: 100vh;
+  width: 100%;
+  background-color: #f0f0f0;
 }
 
-/* Mobile responsiveness */
-@media (max-width: 768px) {
-  .painting-interface {
-    top: 5px;
-    right: 5px;
-    left: 5px;
-    padding: 0.75rem;
-  }
-  
-  .color-palette {
-    flex-wrap: wrap;
-  }
-  
-  .color-option {
-    width: 28px;
-    height: 28px;
-  }
+/* Debug: Make sure map tiles are visible */
+.leaflet-tile {
+  border: 1px solid #ccc;
 }
+
+/* CSS filtering removed - using specialized tile service instead */
+
+/* Color Picker */
+.color-picker {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: white;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  z-index: 1000;
+}
+
+.color-picker h3 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  color: #333;
+}
+
+.color-option {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  margin: 5px;
+  cursor: pointer;
+  border: 2px solid transparent;
+  display: inline-block;
+  transition: all 0.2s;
+}
+
+.color-option:hover {
+  transform: scale(1.1);
+}
+
+.color-option.selected {
+  border-color: #333;
+  transform: scale(1.2);
+}
+
+/* Painting Interface */
+.painting-interface {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  z-index: 1000;
+  max-width: 300px;
+}
+
+.location-status {
+  margin-bottom: 15px;
+}
+
+.loading {
+  color: #3B82F6;
+  font-size: 14px;
+}
+
+.error {
+  color: #DC2626;
+  font-size: 14px;
+}
+
+.success {
+  color: #059669;
+  font-size: 14px;
+}
+
+.color-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Basemap selector removed - using pure street-only basemap */

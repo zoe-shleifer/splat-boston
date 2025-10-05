@@ -1,0 +1,37 @@
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379
+      BIND_ADDR: :8080
+      PAINT_COOLDOWN_MS: 5000
+      GEOFENCE_RADIUS_M: 300
+      SPEED_MAX_KMH: 150
+      ENABLE_TURNSTILE: ${ENABLE_TURNSTILE:-false}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+      WS_WRITE_BUFFER: 1048576
+      WS_PING_INTERVAL_S: 20
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+
